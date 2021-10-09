@@ -78,6 +78,7 @@ public class MainActivity extends AppCompatActivity {
   private void createServices() {
     watsonAssistant = new Assistant("2019-02-28", new IamAuthenticator(mContext.getString(R.string.assistant_apikey)));
     watsonAssistant.setServiceUrl(mContext.getString(R.string.assistant_url));
+
   }
 
   @Override
@@ -118,6 +119,23 @@ public class MainActivity extends AppCompatActivity {
       Log.i(TAG, "Permission to record was already granted");
     }
 
+
+        recyclerView.addOnItemTouchListener(new RecyclerTouchListener(getApplicationContext(), recyclerView, new ClickListener() {
+            @Override
+            public void onClick(View view, final int position) {
+                Message audioMessage = (Message) messageArrayList.get(position);
+                if (audioMessage != null && !audioMessage.getMessage().isEmpty()) {
+
+                }
+            }
+
+            @Override
+            public void onLongClick(View view, int position) {
+                recordMessage();
+
+            }
+        }));
+
         btnSend.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -127,9 +145,16 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
+        btnRecord.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                recordMessage();
+            }
+        });
+
         createServices();
         sendMessage();
-    };
+    }
 
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
@@ -148,6 +173,37 @@ public class MainActivity extends AppCompatActivity {
         return(super.onOptionsItemSelected(item));
     }
 
+
+    // Speech-to-Text Record Audio permission
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        switch (requestCode) {
+            case REQUEST_RECORD_AUDIO_PERMISSION:
+                permissionToRecordAccepted = grantResults[0] == PackageManager.PERMISSION_GRANTED;
+                break;
+            case RECORD_REQUEST_CODE: {
+
+                if (grantResults.length == 0
+                        || grantResults[0] !=
+                        PackageManager.PERMISSION_GRANTED) {
+
+                    Log.i(TAG, "Permission has been denied by user");
+                } else {
+                    Log.i(TAG, "Permission has been granted by user");
+                }
+                return;
+            }
+
+            case MicrophoneHelper.REQUEST_PERMISSION: {
+                if (grantResults.length > 0 && grantResults[0] != PackageManager.PERMISSION_GRANTED) {
+                    Toast.makeText(this, "Permission to record audio denied", Toast.LENGTH_SHORT).show();
+                }
+            }
+        }
+        // if (!permissionToRecordAccepted ) finish();
+
+    }
 
     protected void makeRequest() {
         ActivityCompat.requestPermissions(this,
@@ -170,7 +226,7 @@ public class MainActivity extends AppCompatActivity {
                             inputMessage.setMessage(inputmessage);
                             inputMessage.setId("100");
                             this.initialRequest = false;
-                            Toast.makeText(getApplicationContext(), "Tap on the message for Voice", Toast.LENGTH_LONG).show();
+//                            Toast.makeText(getApplicationContext(), "Tap on the message for Voice", Toast.LENGTH_LONG).show();
 
                         }
 
@@ -211,6 +267,7 @@ public class MainActivity extends AppCompatActivity {
 
                                                     messageArrayList.add(outMessage);
 
+                                                    // speak the message
 
                                                     break;
 
@@ -228,11 +285,15 @@ public class MainActivity extends AppCompatActivity {
 
                                                     messageArrayList.add(outMessage);
 
+                                                    // speak the message
+
                                                     break;
 
                                                 case "image":
                                                     outMessage = new Message(r);
                                                     messageArrayList.add(outMessage);
+
+                                                    // speak the description
 
                                                     break;
                                                 default:
@@ -260,6 +321,36 @@ public class MainActivity extends AppCompatActivity {
                         thread.start();
                     }
 
+
+    //Record a message via Watson Speech to Text
+    private void recordMessage() {
+        if (listening != true) {
+            capture = microphoneHelper.getInputStream(true);
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        speechService.recognizeUsingWebSocket(getRecognizeOptions(capture), new MicrophoneRecognizeDelegate());
+                    } catch (Exception e) {
+                        showError(e);
+                    }
+                }
+            }).start();
+            listening = true;
+            //Toast.makeText(MainActivity.this, "Listening....Click to Stop", Toast.LENGTH_LONG).show();
+
+        } else {
+            try {
+                microphoneHelper.closeInputStream();
+                listening = false;
+               // Toast.makeText(MainActivity.this, "Stopped Listening....Click to Start", Toast.LENGTH_LONG).show();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+
+        }
+    }
+
     /**
      * Check Internet Connection
      *
@@ -278,12 +369,40 @@ public class MainActivity extends AppCompatActivity {
         if (isConnected) {
             return true;
         } else {
-            Toast.makeText(this, " No Internet Connection available ", Toast.LENGTH_LONG).show();
+//            Toast.makeText(this, " No Internet Connection available ", Toast.LENGTH_LONG).show();
             return false;
         }
 
     }
 
+    //Private Methods - Speech to Text
+    private RecognizeOptions getRecognizeOptions(InputStream audio) {
+        return new RecognizeOptions.Builder()
+                .audio(audio)
+                .contentType(ContentType.OPUS.toString())
+                .model("en-US_BroadbandModel")
+                .interimResults(true)
+                .inactivityTimeout(2000)
+                .build();
+    }
+
+    private void showMicText(final String text) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                inputMessage.setText(text);
+            }
+        });
+    }
+
+    private void enableMicButton() {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                btnRecord.setEnabled(true);
+            }
+        });
+    }
 
     private void showError(final Exception e) {
         runOnUiThread(new Runnable() {
@@ -294,6 +413,33 @@ public class MainActivity extends AppCompatActivity {
             }
         });
     }
+
+
+
+
+    //Watson Speech to Text Methods.
+    private class MicrophoneRecognizeDelegate extends BaseRecognizeCallback {
+        @Override
+        public void onTranscription(SpeechRecognitionResults speechResults) {
+            if (speechResults.getResults() != null && !speechResults.getResults().isEmpty()) {
+                String text = speechResults.getResults().get(0).getAlternatives().get(0).getTranscript();
+                showMicText(text);
+            }
+        }
+
+        @Override
+        public void onError(Exception e) {
+            showError(e);
+            enableMicButton();
+        }
+
+        @Override
+        public void onDisconnected() {
+            enableMicButton();
+        }
+
+    }
+
 
 }
 
